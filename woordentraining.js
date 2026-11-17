@@ -14,7 +14,7 @@ function mixGrade(w,correct,kind){
  if(correct){data.stats.correct++;if(kind==='production')r.production[w.id]=true;else r.recognition[w.id]=true}
  else{r.errors++;data.hard[w.id]=(data.hard[w.id]||0)+1;r.production[w.id]=false;r.recognition[w.id]=false;data.known[w.id]=false}
  r.queue.shift();
- const done=r.production[w.id]&&r.recognition[w.id];
+ const done=mixMode==='mix'?(r.production[w.id]&&r.recognition[w.id]):correct;
  if(done){r.mastered[w.id]=true;data.known[w.id]=true}
  else mixRequeue(w.id);
  save();mixFeedback={correct,kind,word:w};
