@@ -33,9 +33,68 @@ const $=id=>document.getElementById(id), esc=s=>String(s).replace(/[&<>"']/g,c=>
 function filtered(){return words.filter(w=>theme==='Alle thema’s'||w.theme===theme)}
 function header(){let tabs=[['vocab','Vocabulaire'],['verbs','Verbes'],['times','Les temps'],['theory','Théorie'],['review','Révision']];$('tabs').innerHTML=tabs.map(([k,v])=>'<button class="'+(tab===k?'active':'')+'" data-tab="'+k+'">'+v+'</button>').join('');document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.tab;index=0;question=null;render()})}
 function render(){header();if(tab==='vocab')vocab();if(tab==='verbs')verbView();if(tab==='times')timeView();if(tab==='theory')theoryView();if(tab==='review')review()}
-function vocab(){let ws=filtered();if(index>=ws.length)index=0;let w=ws[index];$('main').innerHTML='<div class="panel"><label class="tag">Thema</label><select id="theme">'+['Alle thema’s',...new Set(words.map(x=>x.theme))].map(t=>'<option '+(theme===t?'selected':'')+'>'+esc(t)+'</option>').join('')+'</select><div class="row"><button id="cards" class="'+(mode==='cards'?'primary':'secondary')+'">Flashcards</button><button id="quiz" class="'+(mode==='quiz'?'primary':'secondary')+'">Meerkeuze</button><button id="fill" class="'+(mode==='fill'?'primary':'secondary')+'">Invullen</button></div></div><div id="exercise"></div>'; $('theme').onchange=e=>{theme=e.target.value;index=0;question=null;render()};['cards','quiz','fill'].forEach(m=>$(m).onclick=()=>{mode=m;question=null;render()});if(mode==='cards'){ $('exercise').innerHTML='<p class="muted">Kaart '+(index+1)+' van '+ws.length+' · '+Object.keys(data.known).filter(k=>data.known[k]).length+' gekende woorden</p><div class="card" id="flip"><div><strong>'+esc(flipped?w.nl:w.fr)+'</strong><small>Raak de kaart aan om te draaien</small></div></div><div class="row"><button class="secondary" id="again">Nog oefenen</button><button class="primary" id="known">Ken ik ✓</button></div><button class="secondary wide" id="next">Volgende →</button>'; $('flip').onclick=()=>{flipped=!flipped;render()};$('again').onclick=()=>{data.known[w.id]=false;save();advance()};$('known').onclick=()=>{data.known[w.id]=true;save();advance()};$('next').onclick=advance;}else quizView(ws)}
+
+// Typtraining: fout beantwoorde woorden keren terug na enkele andere vragen.
+// Alleen deze nieuwe oefenronde wordt beheerd; bestaande voortgang blijft bewaard.
+let typingSession=null, typingFeedback=null;
+mode='typing';
+function buildTypingSession(){
+ const ids=filtered().map(w=>w.id);
+ // Mix de volgorde zodat je geen woordenlijst uit het hoofd leert.
+ for(let i=ids.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ids[i],ids[j]]=[ids[j],ids[i]]}
+ typingSession={theme,queue:ids,done:0,total:ids.length,attempts:0,mistakes:0};
+ typingFeedback=null;
+}
+function typingView(){
+ if(!typingSession||typingSession.theme!==theme)buildTypingSession();
+ const q=typingSession;
+ if(!q.queue.length){
+ $('exercise').innerHTML='<div class="panel"><span class="tag">Ronde afgerond</span><h2>Bravo ! 🎉</h2><p>Je hebt alle '+q.total+' woorden correct getypt. Fout beantwoorde woorden zijn opnieuw aangeboden.</p><p class="muted">'+q.attempts+' pogingen · '+q.mistakes+' fouten</p><button class="primary wide" id="restart">Nieuwe ronde starten</button></div>';
+ $('restart').onclick=()=>{buildTypingSession();typingView()};return;
+ }
+ const w=words.find(x=>x.id===q.queue[0]);
+ const remaining=q.queue.length;
+ $('exercise').innerHTML='<div class="panel"><span class="tag">Schrijf in het Frans</span><p class="muted">'+q.done+' van '+q.total+' afgerond · '+remaining+' nog te oefenen</p><h2>'+esc(w.nl)+'</h2><form id="typeForm"><input id="typed" class="input" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Typ de Franse vertaling..." aria-label="Franse vertaling" '+(typingFeedback?'disabled':'')+'><button class="primary wide" type="submit" id="typeSubmit">'+(typingFeedback?'Volgende woord →':'Controleer')+'</button></form><div id="typeFeedback">'+(typingFeedback?'<div class="feedback '+(typingFeedback.ok?'good':'')+'">'+(typingFeedback.ok?'✓ Correct!':'Nog niet juist. Correct is: <strong>'+esc(w.fr)+'</strong><p class="small">Dit woord komt later opnieuw terug.</p>')+'</div>':'')+'</div><p class="small">Accenten, spelling en lidwoorden tellen mee. Hoofdletters en extra spaties niet.</p></div>';
+ $('typeForm').onsubmit=e=>{
+ e.preventDefault();
+ if(typingFeedback){typingFeedback=null;typingView();return}
+ const answer=$('typed').value.trim();if(!answer)return;
+ const ok=normalize(answer)===normalize(w.fr);
+ q.attempts++;data.stats.total++;if(ok)data.stats.correct++;
+ if(ok){q.queue.shift();q.done++;data.known[w.id]=true}
+ else{
+ q.queue.shift();
+ q.mistakes++;data.known[w.id]=false;data.hard[w.id]=(data.hard[w.id]||0)+1;
+ // Herhaal na maximaal drie andere woorden; bij de laatste woorden eerder.
+ const delay=Math.min(3,q.queue.length);
+ q.queue.splice(delay,0,w.id);
+ }
+ save();typingFeedback={ok};typingView();
+ };
+ if(!typingFeedback)$('typed').focus();
+}
+function vocab(){
+ let ws=filtered();if(index>=ws.length)index=0;let w=ws[index];
+ $('main').innerHTML='<div class="panel"><label class="tag">Thema</label><select id="theme">'+['Alle thema’s',...new Set(words.map(x=>x.theme))].map(t=>'<option '+(theme===t?'selected':'')+'>'+esc(t)+'</option>').join('')+'</select><div class="row"><button id="typing" class="'+(mode==='typing'?'primary':'secondary')+'">Typen</button><button id="cards" class="'+(mode==='cards'?'primary':'secondary')+'">Flashcards</button><button id="quiz" class="'+(mode==='quiz'?'primary':'secondary')+'">Meerkeuze</button></div></div><div id="exercise"></div>';
+ $('theme').onchange=e=>{theme=e.target.value;index=0;question=null;typingSession=null;typingFeedback=null;render()};
+ ['typing','cards','quiz'].forEach(m=>$(m).onclick=()=>{mode=m;question=null;typingFeedback=null;render()});
+ if(mode==='typing'){typingView();return}
+ if(mode==='cards'){
+ $('exercise').innerHTML='<p class="muted">Kaart '+(index+1)+' van '+ws.length+' · '+Object.keys(data.known).filter(k=>data.known[k]).length+' gekende woorden</p><div class="card" id="flip"><div><strong>'+esc(flipped?w.nl:w.fr)+'</strong><small>Raak de kaart aan om te draaien</small></div></div><div class="row"><button class="secondary" id="again">Nog oefenen</button><button class="primary" id="known">Ken ik ✓</button></div><button class="secondary wide" id="next">Volgende →</button>';
+ $('flip').onclick=()=>{flipped=!flipped;render()};$('again').onclick=()=>{data.known[w.id]=false;save();advance()};$('known').onclick=()=>{data.known[w.id]=true;save();advance()};$('next').onclick=advance;
+ }else quizView(ws);
+}
 function advance(){index=(index+1)%filtered().length;flipped=false;question=null;render()}
-function quizView(ws){let w=ws[index];if(!question||question.id!==w.id){question=w;selected='';checked=false}let others=words.filter(x=>x.id!==w.id&&x.nl!==w.nl).sort((a,b)=>a.id.localeCompare(b.id)).slice((index*3)%20,(index*3)%20+3);let options=[w.nl,...others.map(x=>x.nl)].sort((a,b)=>a.localeCompare(b));$('exercise').innerHTML='<div class="panel"><span class="tag">Vraag '+(index+1)+' / '+ws.length+'</span><h2>Wat betekent « '+esc(w.fr)+' »?</h2>'+(mode==='quiz'?options.map(o=>'<button class="choice '+(selected===o?'selected':'')+'" data-answer="'+esc(o)+'">'+esc(o)+'</button>').join(''):'<input class="input" id="answer" placeholder="Schrijf de Nederlandse betekenis..." value="'+esc(selected)+'">')+'<button class="primary wide" id="check">'+(checked?'Volgende →':'Controleer')+'</button><div id="fb"></div></div>';if(mode==='quiz')document.querySelectorAll('[data-answer]').forEach(b=>b.onclick=()=>{if(!checked){selected=b.dataset.answer;quizView(ws)}});else $('answer').oninput=e=>selected=e.target.value;$('check').onclick=()=>{if(checked){advance();return}if(!selected.trim())return;checked=true;let ok=normalize(selected)===normalize(w.nl);data.stats.total++;if(ok)data.stats.correct++;else data.hard[w.id]=(data.hard[w.id]||0)+1;save();$('fb').innerHTML='<div class="feedback '+(ok?'good':'')+'">'+(ok?'✓ Correct!':'Juiste antwoord: '+esc(w.nl))+'</div>';$('check').textContent='Volgende →'} }
+function quizView(ws){
+ let w=ws[index];if(!question||question.id!==w.id){question=w;selected='';checked=false}
+ const others=words.filter(x=>x.id!==w.id&&x.nl!==w.nl).sort(()=>Math.random()-.5).slice(0,3);
+ const options=[w.nl,...others.map(x=>x.nl)].sort(()=>Math.random()-.5);
+ // Bewaar de volgorde bij een selectie, zodat knoppen niet verspringen.
+ if(!question.options)question.options=options;
+ $('exercise').innerHTML='<div class="panel"><span class="tag">Vraag '+(index+1)+' / '+ws.length+'</span><h2>Wat betekent « '+esc(w.fr)+' »?</h2>'+question.options.map(o=>'<button class="choice '+(selected===o?'selected':'')+'" data-answer="'+esc(o)+'">'+esc(o)+'</button>').join('')+'<button class="primary wide" id="check">'+(checked?'Volgende →':'Controleer')+'</button><div id="fb"></div></div>';
+ document.querySelectorAll('[data-answer]').forEach(b=>b.onclick=()=>{if(!checked){selected=b.dataset.answer;quizView(ws)}});
+ $('check').onclick=()=>{if(checked){advance();return}if(!selected.trim())return;checked=true;let ok=normalize(selected)===normalize(w.nl);data.stats.total++;if(ok)data.stats.correct++;else data.hard[w.id]=(data.hard[w.id]||0)+1;save();$('fb').innerHTML='<div class="feedback '+(ok?'good':'')+'">'+(ok?'✓ Correct!':'Juiste antwoord: '+esc(w.nl))+'</div>';$('check').textContent='Volgende →'}
+}
 function verbView(){$('main').innerHTML='<div class="panel"><p class="muted">Kies een werkwoord en oefen de présent.</p><select id="verb">'+verbs.map((v,i)=>'<option value="'+i+'">'+v.name+' · '+v.nl+'</option>').join('')+'</select><div id="verbdetail"></div></div>';let n=0;function detail() {let v=verbs[n];$('verbdetail').innerHTML='<h2>'+v.name+'</h2><p class="muted">Passé composé: '+v.aux+' + '+v.part+'</p>'+persons.map((p,i)=>'<div style="padding:9px;border-bottom:1px solid #eee">'+esc(p)+' <strong>'+esc(v.present[i])+'</strong></div>').join('')+'<h3>Oefen een vervoeging</h3><p>'+persons[index%6]+' ______ ('+v.name+')</p><input class="input" id="verbanswer" placeholder="Vul de vervoeging in"><button class="primary wide" id="verbcheck">Controleer</button><div id="verbfb"></div><button class="secondary wide" id="verbnext">Andere persoon →</button>';$('verbcheck').onclick=()=>{let ok=normalize($('verbanswer').value)===normalize(v.present[index%6]);data.stats.total++;if(ok)data.stats.correct++;save();$('verbfb').innerHTML='<div class="feedback '+(ok?'good':'')+'">'+(ok?'✓ Correct!':'Juiste antwoord: '+v.present[index%6])+'</div>'};$('verbnext').onclick=()=>{index++;detail()}}$('verb').onchange=e=>{n=+e.target.value;index=0;detail()};detail()}
 function timeView(){$('main').innerHTML='<div class="panel"><h2>Werkwoordstijden</h2><p class="muted">Leer wanneer je een tijd gebruikt en bekijk voorbeelden.</p>'+theory.slice(0,4).map(t=>'<details><summary>'+esc(t.title)+'</summary><p>'+esc(t.body)+'</p><div class="feedback">'+esc(t.example)+'</div></details>').join('')+'</div>'}
 function theoryView(){$('main').innerHTML='<div class="panel"><h2>Grammatica A2</h2><p class="muted">Taalregels zonder werkwoordstijden. Voor de tijden ga je naar Les temps.</p>'+theory.slice(4).map(t=>'<details><summary>'+esc(t.title)+'</summary><p>'+esc(t.body)+'</p><div class="feedback">'+esc(t.example)+'</div></details>').join('')+'</div>'}
